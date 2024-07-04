@@ -1,1 +1,63 @@
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
+# Load the dataset
+df = pd.read_csv('/mnt/data/AAPL.csv')
+
+# Ensure the date column is of datetime type
+df['Date'] = pd.to_datetime(df['Date'])
+df.set_index('Date', inplace=True)
+
+# Apply exponential smoothing to the 'Close' prices
+df['Close_smoothed'] = ExponentialSmoothing(df['Close'], trend='add', seasonal=None, seasonal_periods=12).fit().fittedvalues
+
+# Calculate RSI
+delta = df['Close_smoothed'].diff()
+gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+rs = gain / loss
+df['RSI'] = 100 - (100 / (1 + rs))
+
+# Calculate MACD
+exp12 = df['Close_smoothed'].ewm(span=12, adjust=False).mean()
+exp26 = df['Close_smoothed'].ewm(span=26, adjust=False).mean()
+df['MACD'] = exp12 - exp26
+df['MACD_signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+
+# Calculate Price Rate of Change
+df['Price_Rate_of_Change'] = df['Close_smoothed'].pct_change(periods=12)
+
+# Calculate Stochastic Oscillator
+lowest_low = df['Low'].rolling(window=14).min()
+highest_high = df['High'].rolling(window=14).max()
+df['Stochastic_K'] = 100 * ((df['Close_smoothed'] - lowest_low) / (highest_high - lowest_low))
+df['Stochastic_D'] = df['Stochastic_K'].rolling(window=3).mean()
+
+# Calculate Williams %R
+df['Williams_%R'] = -100 * ((highest_high - df['Close_smoothed']) / (highest_high - lowest_low))
+
+# Create a target column 'Prediction' based on the direction of the 'Close' price
+df['Prediction'] = np.where(df['Close'].shift(-1) > df['Close'], 1, 0)
+
+# Drop rows with NaN values
+df.dropna(inplace=True)
+
+# Prepare training and testing data
+features = ['RSI', 'MACD', 'MACD_signal', 'Price_Rate_of_Change', 'Stochastic_K', 'Stochastic_D', 'Williams_%R']
+X = df[features]
+y = df['Prediction']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
+
+# Train and evaluate the Random Forest model
+model = RandomForestClassifier(n_estimators=100, random_state=0)
+model.fit(X_train, y_train)
+
+y_pred = model.predict(X_test)
+accuracy = accuracy_score(y_test, y_pred)
+
+accuracy
